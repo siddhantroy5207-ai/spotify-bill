@@ -8,14 +8,12 @@
     :root{
       --bg:#070707;
       --panel:#393536;
-      --accent:#1DB954; /* Spotify green */
+      --accent:#1DB954;
       --muted:#bdb6b6;
-      --glass: rgba(255,255,255,0.03);
       font-family: 'Segoe UI', Roboto, Arial, sans-serif;
     }
     html,body{height:100%;margin:0;background:var(--bg);color:#fff}
     .wrap{max-width:1100px;margin:40px auto;padding:36px}
-
     header{display:flex;flex-direction:column;gap:18px;align-items:center}
     h1{color:var(--accent);font-weight:600;letter-spacing:2px;font-size:48px;margin:0}
     h1 .who{font-size:18px;color:var(--muted);display:block;text-transform:none}
@@ -24,7 +22,6 @@
     .muted{color:var(--muted);font-size:13px}
     button{background:var(--accent);border:0;padding:12px 16px;border-radius:6px;color:#03150b;font-weight:700;cursor:pointer}
     .controls{display:flex;gap:10px;align-items:center}
-
     .card{margin-top:26px;background:var(--panel);padding:12px;border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,0.6);overflow:hidden}
     .table{width:100%;border-collapse:collapse}
     thead th{background:transparent;color:var(--accent);padding:18px;border-bottom:1px solid rgba(0,0,0,0.4);text-align:left}
@@ -34,19 +31,13 @@
     .rank{width:36px;color:var(--muted);font-weight:700}
     .small{font-size:13px;color:var(--muted)}
     .download{margin-left:auto}
-
     .empty{padding:40px;text-align:center;color:var(--muted)}
-
-    /* toast */
     .toast{position:fixed;top:20px;right:20px;background:#121212;border:1px solid rgba(255,255,255,0.04);padding:12px 18px;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,0.6);color:var(--muted);display:flex;gap:12px;align-items:center}
     .toast.show{animation:pop .3s ease, fadeout 0.8s ease 9s forwards}
     @keyframes pop{from{transform:translateY(-6px);opacity:0}to{transform:none;opacity:1}}
     @keyframes fadeout{to{opacity:0;transform:translateY(-6px)}}
-
-    /* subtle hover */
     tbody tr{transition:transform .12s ease,background .12s ease}
     tbody tr:hover{transform:translateY(-4px);background:rgba(0,0,0,0.06)}
-
     @media(max-width:800px){h1{font-size:32px}.wrap{padding:20px}.thumb{height:44px;width:44px}}
   </style>
 </head>
@@ -57,7 +48,7 @@
       <div class="input-row">
         <input id="profileUrl" type="text" placeholder="ENTER YOUR SPOTIFY PROFILE URL (optional) — or click Connect Spotify" />
         <div class="controls">
-          <button id="connect">Connect Spotify</button>
+          <a id="connect" href="#" role="button" style="display:inline-block;text-decoration:none;" onclick="event.preventDefault(); startAuth();">Connect Spotify</a>
           <button id="generate" disabled>Generate Bill</button>
           <button id="download" class="download" disabled>Download Bill</button>
         </div>
@@ -81,7 +72,7 @@
         <tbody id="tbody"></tbody>
       </table>
       <div style="margin-top:12px;color:var(--muted);font-size:13px">
-        Notes: Spotify's Web API provides a user's top tracks but it does NOT provide historical per-user play counts. The numbers shown under "Times played" and "Mins Played" are estimates based on the user's recent plays (last 50) when available. For accurate lifetime play counts you must use Spotify's own activity summaries (not exposed publicly).
+        Notes: Spotify's Web API provides a user's top tracks but it does NOT provide historical per-user play counts. The numbers shown under "Times played" and "Mins Played" are estimates based on the user's recent plays (last 50) when available.
       </div>
     </section>
   </div>
@@ -89,21 +80,18 @@
   <div id="toast" class="toast" style="display:none">✅ Authorized — click <strong>Generate Bill</strong> to create your bill</div>
 
 <script>
-// --------------------
-// Configuration / setup
-// --------------------
-const CLIENT_ID = '285cd2238c0c43288db034fa778abc80'; // <- filled by you
-const REDIRECT_URI = window.location.origin + window.location.pathname; // make sure this is allowed in app settings
+/* ---------- CONFIG - insert your client id here ---------- */
+const CLIENT_ID = '285cd2238c0c43288db034fa778abc80';
+const REDIRECT_URI = window.location.origin + window.location.pathname;
 const SCOPES = 'user-top-read user-read-recently-played user-read-private';
 
-// --------------------
-// PKCE helpers
-// --------------------
-function base64urlencode(str) {
-  return btoa(String.fromCharCode.apply(null, new Uint8Array(str)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+/* ---------- PKCE helpers ---------- */
+function base64urlencode(arrBuffer) {
+  // arrBuffer is an ArrayBuffer (from crypto.subtle.digest)
+  const bytes = new Uint8Array(arrBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 async function sha256(plain) {
   const encoder = new TextEncoder();
@@ -117,27 +105,34 @@ async function generateCodeChallenge(code_verifier) {
 function generateRandomString(length) {
   const array = new Uint8Array(length);
   crypto.getRandomValues(array);
-  return Array.from(array, dec=>('0'+dec.toString(16)).substr(-2)).join('');
+  let s = '';
+  for (let i = 0; i < array.length; i++) {
+    s += ('0' + array[i].toString(16)).slice(-2);
+  }
+  return s;
 }
 
-// --------------------
-// OAuth flow
-// --------------------
+/* ---------- OAuth flow ---------- */
 async function startAuth() {
-  const code_verifier = generateRandomString(64);
-  const code_challenge = await generateCodeChallenge(code_verifier);
-  sessionStorage.setItem('code_verifier', code_verifier);
+  try {
+    const code_verifier = generateRandomString(64);
+    const code_challenge = await generateCodeChallenge(code_verifier);
+    sessionStorage.setItem('code_verifier', code_verifier);
 
-  const params = new URLSearchParams({
-    client_id: CLIENT_ID,
-    response_type: 'code',
-    redirect_uri: REDIRECT_URI,
-    code_challenge_method: 'S256',
-    code_challenge,
-    scope: SCOPES,
-  });
-  const url = `https://accounts.spotify.com/authorize?${params.toString()}`;
-  window.location = url;
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      code_challenge_method: 'S256',
+      code_challenge: code_challenge,
+      scope: SCOPES
+    });
+    const url = 'https://accounts.spotify.com/authorize?' + params.toString();
+    window.location = url;
+  } catch (e) {
+    console.error('startAuth error', e);
+    alert('Authorization failed: ' + e.message);
+  }
 }
 
 async function handleRedirect() {
@@ -148,24 +143,27 @@ async function handleRedirect() {
     alert('Spotify auth error: ' + error);
   }
   if (!code) return null;
-  // exchange code for token
-  const code_verifier = sessionStorage.getItem('code_verifier');
+  const code_verifier = sessionStorage.getItem('code_verifier') || '';
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
-    code,
+    code: code,
     redirect_uri: REDIRECT_URI,
     client_id: CLIENT_ID,
-    code_verifier
+    code_verifier: code_verifier
   });
   const resp = await fetch('https://accounts.spotify.com/api/token', {
-    method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: body.toString()
   });
   const data = await resp.json();
-  if (data.error) { alert('Token error: '+data.error); return null }
-  // save
+  if (data.error) {
+    alert('Token error: ' + (data.error_description || data.error));
+    return null;
+  }
   sessionStorage.setItem('access_token', data.access_token);
   sessionStorage.setItem('refresh_token', data.refresh_token || '');
-  // clean url
+  // remove code from url
   url.searchParams.delete('code');
   history.replaceState({}, document.title, url.pathname);
   return data.access_token;
@@ -178,20 +176,20 @@ async function ensureToken() {
   return token;
 }
 
-// --------------------
-// Spotify helpers
-// --------------------
-async function sfetch(endpoint, token, opts={}){
-  const res = await fetch('https://api.spotify.com/v1'+endpoint, {headers:{'Authorization':'Bearer '+token}, ...opts});
-  if (!res.ok) throw new Error('Spotify API error: '+res.status);
+/* ---------- Spotify helpers ---------- */
+async function sfetch(endpoint, token, opts) {
+  const res = await fetch('https://api.spotify.com/v1' + endpoint, Object.assign({
+    headers: {'Authorization': 'Bearer ' + token}
+  }, opts || {}));
+  if (!res.ok) throw new Error('Spotify API error: ' + res.status);
   return await res.json();
 }
 
-function msToMinutes(ms){return (ms/60000).toFixed(1)}
+function msToMinutes(ms) {
+  return (ms / 60000).toFixed(1);
+}
 
-// --------------------
-// UI and data flow
-// --------------------
+/* ---------- UI ---------- */
 const connectBtn = document.getElementById('connect');
 const genBtn = document.getElementById('generate');
 const downloadBtn = document.getElementById('download');
@@ -202,124 +200,119 @@ const profileInput = document.getElementById('profileUrl');
 const toast = document.getElementById('toast');
 const titleWho = document.getElementById('who');
 
-connectBtn.addEventListener('click', async ()=>{
-  if (!CLIENT_ID || CLIENT_ID.includes('<YOUR')){
-    alert('Please set your Spotify client id in the script before using this page.');
-    return;
-  }
-  await startAuth();
-});
-
-genBtn.addEventListener('click', generateBill);
-
-downloadBtn.addEventListener('click', ()=>{
+if (connectBtn) {
+  // already wired via inline onclick; also attach listener as redundancy
+  connectBtn.addEventListener && connectBtn.addEventListener('click', function(e){
+    e.preventDefault();
+    startAuth();
+  });
+}
+genBtn && genBtn.addEventListener('click', generateBill);
+downloadBtn && downloadBtn.addEventListener('click', function(){
   const csv = buildCSV(currentTracks);
   const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'spotify-bill.csv';
-  document.body.appendChild(a);a.click();a.remove();
+  document.body.appendChild(a); a.click(); a.remove();
 });
 
-document.addEventListener('DOMContentLoaded', ()=>{ if (sessionStorage.getItem('access_token')) genBtn.disabled=false });
+document.addEventListener('DOMContentLoaded', function(){
+  if (sessionStorage.getItem('access_token')) genBtn.disabled = false;
+});
 
 let currentTracks = [];
 
-async function generateBill(){
-  try{
-    genBtn.disabled = true; status.textContent='Fetching token...';
+async function generateBill() {
+  try {
+    genBtn.disabled = true;
+    status.textContent = 'Fetching token...';
     const token = await ensureToken();
-    if (!token) { status.textContent='Authentication required.'; genBtn.disabled=false; return }
-    status.textContent='Fetching top tracks...';
+    if (!token) { status.textContent = 'Authentication required.'; genBtn.disabled = false; return; }
+    status.textContent = 'Fetching top tracks...';
     const top = await sfetch('/me/top/tracks?limit=20', token);
-    // fetch recently played to estimate counts (last 50 plays only)
-    status.textContent='Fetching recent plays (estimates)...';
-    let recent = {items:[]};
-    try{ recent = await sfetch('/me/player/recently-played?limit=50', token); }catch(e){/*ignore*/}
+    status.textContent = 'Fetching recent plays (estimates)...';
+    let recent = {items: []};
+    try { recent = await sfetch('/me/player/recently-played?limit=50', token); } catch(e){}
     const counts = {};
-    recent.items.forEach(it=>{ const id = it.track.id; counts[id] = (counts[id]||0)+1 });
+    recent.items.forEach(function(it){ const id = it.track && it.track.id; if (id) counts[id] = (counts[id] || 0) + 1; });
 
-    // fetch genres from primary artist
-    status.textContent='Fetching artist genres...';
-    const enhanced = await Promise.all(top.items.map(async (t,idx)=>{
-      let genre='';
-      try{
-        const artist = await sfetch('/artists/'+t.artists[0].id, token);
-        genre = (artist.genres && artist.genres.length)?artist.genres[0]:'—';
-      }catch(e){genre='—'}
+    status.textContent = 'Fetching artist genres...';
+    const enhanced = await Promise.all(top.items.map(async function(t, idx){
+      let genre = '';
+      try {
+        const artist = await sfetch('/artists/' + t.artists[0].id, token);
+        genre = artist.genres && artist.genres.length ? artist.genres[0] : '—';
+      } catch(e){ genre = '—'; }
       const times = counts[t.id] || 0;
-      const mins = (times>0) ? (msToMinutes(t.duration_ms*times)) : '—';
+      const mins = (times > 0) ? (msToMinutes(t.duration_ms * times)) : '—';
       return {
-        rank: idx+1,
+        rank: idx + 1,
         id: t.id,
         name: t.name,
-        artists: t.artists.map(a=>a.name).join(', '),
-        genre,
+        artists: t.artists.map(function(a){ return a.name; }).join(', '),
+        genre: genre,
         duration_ms: t.duration_ms,
         times_played_est: times,
         mins_played_est: mins,
         thumbnail: t.album.images && t.album.images[0] ? t.album.images[0].url : ''
-      }
+      };
     }));
 
     currentTracks = enhanced;
     renderTable(enhanced);
-    status.style.display='none'; table.style.display='table'; downloadBtn.disabled=false; genBtn.disabled=false;
-  }catch(err){
-    console.error(err); status.textContent='Error: '+err.message; genBtn.disabled=false;
+    status.style.display = 'none';
+    table.style.display = 'table';
+    downloadBtn.disabled = false;
+    genBtn.disabled = false;
+  } catch(err) {
+    console.error(err);
+    status.textContent = 'Error: ' + err.message;
+    genBtn.disabled = false;
   }
 }
 
-function renderTable(list){
-  tbody.innerHTML='';
-  list.forEach(item=>{
+function renderTable(list) {
+  tbody.innerHTML = '';
+  list.forEach(function(item){
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="rank">${item.rank}.</td>
-      <td>
-        <div class="songrow"><img src="${item.thumbnail}" class="thumb" onerror="this.style.display='none'">
-        <div><div>${item.name}</div><div class="small">${msToMinutes(item.duration_ms)} min</div></div></div>
-      </td>
-      <td>${item.artists}</td>
-      <td>${item.genre}</td>
-      <td>${item.mins_played_est}</td>
-      <td>${item.times_played_est}</td>
-    `;
+    tr.innerHTML = ''
+      + '<td class="rank">' + item.rank + '.</td>'
+      + '<td><div class="songrow"><img src="' + item.thumbnail + '" class="thumb" onerror="this.style.display=\\'none\\'">'
+      + '<div><div>' + item.name + '</div><div class="small">' + msToMinutes(item.duration_ms) + ' min</div></div></div></td>'
+      + '<td>' + item.artists + '</td>'
+      + '<td>' + item.genre + '</td>'
+      + '<td>' + item.mins_played_est + '</td>'
+      + '<td>' + item.times_played_est + '</td>';
     tbody.appendChild(tr);
-  })
+  });
 }
 
-function buildCSV(list){
+function buildCSV(list) {
   const rows = [['Rank','Song','Artist','Genre','Mins Played (est.)','Times Played (est.)']];
-  list.forEach(r=>rows.push([r.rank, r.name, r.artists, r.genre, r.mins_played_est, r.times_played_est]));
-  return rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('
-');
+  list.forEach(function(r){ rows.push([r.rank, r.name, r.artists, r.genre, r.mins_played_est, r.times_played_est]); });
+  return rows.map(function(r){ return r.map(function(c){ return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
 }
 
-// --------------------
-// On load: enable generate if already authed and handle redirect
-// --------------------
-(async ()=>{
+/* ---------- On load: handle redirect and fetch profile ---------- */
+(async function(){
   const token = sessionStorage.getItem('access_token');
-  if (token) genBtn.disabled=false;
-  if (new URL(window.location).searchParams.get('code')){
+  if (token) genBtn.disabled = false;
+  if (new URL(window.location).searchParams.get('code')) {
     await handleRedirect();
-    // after auth, fetch basic profile info and show toast, also fill input
     const t = sessionStorage.getItem('access_token');
-    if (t){
-      try{
+    if (t) {
+      try {
         const me = await sfetch('/me', t);
         const name = me.display_name || me.id || 'User';
         const profileUrl = me.external_urls && me.external_urls.spotify ? me.external_urls.spotify : '';
-        // set title and input
-        titleWho.textContent = `${name}'s bill`;
+        titleWho.textContent = name + "'s bill";
         if (profileUrl) profileInput.value = profileUrl;
-        // show toast
         toast.style.display = 'flex';
         toast.classList.add('show');
-        setTimeout(()=>{ toast.style.display='none'; toast.classList.remove('show') }, 10000);
-        genBtn.disabled=false;
-      }catch(e){console.warn('profile fetch failed',e)}
+        setTimeout(function(){ toast.style.display = 'none'; toast.classList.remove('show'); }, 10000);
+        genBtn.disabled = false;
+      } catch(e) { console.warn('profile fetch failed', e); }
     }
   }
 })();
