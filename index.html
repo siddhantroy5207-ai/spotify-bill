@@ -188,12 +188,29 @@ const status = document.getElementById('status');
 const tbody = document.getElementById('tbody');
 const table = document.getElementById('table');
 
-connectBtn.addEventListener('click', async ()=>{
-  if (!CLIENT_ID || CLIENT_ID.includes('<YOUR')){
-    alert('Please set your Spotify client id in the script before using this page. See the top of the HTML file.');
-    return;
+connectBtn.addEventListener('click', async () => {
+  try {
+    if (!CLIENT_ID || CLIENT_ID.includes('<YOUR')) {
+      alert('Please set your Spotify client id in the script before using this page. See the top of the HTML file.');
+      return;
+    }
+
+    connectBtn.disabled = true;
+    connectBtn.textContent = 'Connecting...';
+
+    await startAuth();
+
+  } catch (error) {
+    console.error('Spotify connection failed:', error);
+
+    alert(
+      'Spotify connection failed:\n' +
+      (error.message || error)
+    );
+
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect Spotify';
   }
-  await startAuth();
 });
 
 genBtn.addEventListener('click', generateBill);
