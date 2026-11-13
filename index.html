@@ -22,16 +22,20 @@
     input[type=text]{flex:1;padding:14px 18px;background:var(--panel);border:0;border-radius:3px;color:#ddd}
     .muted{color:var(--muted);font-size:13px}
     button{background:var(--accent);border:0;padding:12px 16px;border-radius:4px;color:#03150b;font-weight:700;cursor:pointer}
+    button:disabled{opacity:.72;cursor:not-allowed}
     .controls{display:flex;gap:10px;align-items:center}
 
     .card{margin-top:26px;background:var(--panel);padding:12px;border-radius:4px;box-shadow:0 8px 30px rgba(0,0,0,0.6)}
     .table{width:100%;border-collapse:collapse}
     thead th{background:transparent;color:var(--accent);padding:14px;border-bottom:1px solid rgba(0,0,0,0.4);text-align:left}
     tbody td{padding:14px;border-bottom:1px dashed rgba(255,255,255,0.04);vertical-align:middle}
-    .thumb{height:48px;width:48px;border-radius:4px;object-fit:cover;margin-right:10px}
-    .songrow{display:flex;align-items:center}
+    .thumb{height:48px;width:48px;border-radius:4px;object-fit:cover;margin-right:10px;flex:0 0 48px}
+    .songrow{display:flex;align-items:center;min-width:180px}
+    .song-title{overflow-wrap:anywhere}
+    .numeric{white-space:nowrap;font-variant-numeric:tabular-nums}
     .rank{width:28px;color:var(--muted)}
     .small{font-size:13px;color:var(--muted)}
+    .table-wrap{width:100%;overflow-x:auto}
     .download{margin-left:auto}
 
     .empty{padding:40px;text-align:center;color:var(--muted)}
@@ -56,6 +60,7 @@
 
     <section class="card" id="result">
       <div id="status" class="empty">No bill yet — connect your Spotify account and click "Generate Bill".</div>
+      <div class="table-wrap">
       <table id="table" class="table" style="display:none">
         <thead>
           <tr>
@@ -63,14 +68,16 @@
             <th>SONG</th>
             <th>ARTIST</th>
             <th>Genre</th>
+            <th>Duration (min)</th>
             <th>Mins Played (est.)</th>
             <th>Times played (est.)</th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
       </table>
+      </div>
       <div style="margin-top:12px;color:var(--muted);font-size:13px">
-        Notes: Spotify's Web API provides a user's top tracks but it does NOT give exact per-user play counts. This tool shows your top 20 (ranked) and uses your recent plays (last 50 items) to estimate "times played" and minutes listened when possible. Estimates are limited by Spotify API data.
+        Notes: Spotify's Web API does not provide exact per-user play counts. Minutes played and play counts are estimates based on your last 50 recently played tracks. Genre information is best-effort because Spotify has deprecated the artist genres field, so some genres may not be available.
       </div>
     </section>
   </div>
@@ -178,6 +185,64 @@ async function sfetch(endpoint, token, opts={}){
 
 function msToMinutes(ms){return (ms/60000).toFixed(1)}
 
+function firstAvailableGenre(artist) {
+  if (!artist || !Array.isArray(artist.genres)) return '';
+  const genre = artist.genres.find(value => typeof value === 'string' && value.trim());
+  return genre ? genre.trim() : '';
+}
+
+// Spotify now marks the artist genres field as deprecated. Try the user's top
+// artists first, then fall back to individual artist lookups for missing IDs.
+// Requests are made in small batches to avoid firing 20 requests at once.
+async function fetchGenreMap(tracks, token) {
+  const genreMap = new Map();
+  const artistsById = new Map();
+
+  tracks.forEach(track => {
+    (track.artists || []).forEach(artist => {
+      if (artist && artist.id) artistsById.set(artist.id, artist);
+    });
+  });
+
+  try {
+    const topArtists = await sfetch('/me/top/artists?limit=50', token);
+    (topArtists.items || []).forEach(artist => {
+      const genre = firstAvailableGenre(artist);
+      if (artist.id && genre) genreMap.set(artist.id, genre);
+    });
+  } catch (error) {
+    console.warn('Could not read genres from the top-artists endpoint:', error);
+  }
+
+  const missingArtists = Array.from(artistsById.values())
+    .filter(artist => !genreMap.has(artist.id));
+
+  for (let i = 0; i < missingArtists.length; i += 4) {
+    const batch = missingArtists.slice(i, i + 4);
+    await Promise.all(batch.map(async artist => {
+      try {
+        const details = await sfetch('/artists/' + encodeURIComponent(artist.id), token);
+        const genre = firstAvailableGenre(details);
+        if (genre) genreMap.set(artist.id, genre);
+      } catch (error) {
+        console.warn('Genre lookup failed for artist ' + artist.name + ':', error);
+      }
+    }));
+  }
+
+  return genreMap;
+}
+
+function escapeHTML(value) {
+  return String(value ?? '').replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[character]);
+}
+
 // --------------------
 // UI and data flow
 // --------------------
@@ -187,6 +252,16 @@ const downloadBtn = document.getElementById('download');
 const status = document.getElementById('status');
 const tbody = document.getElementById('tbody');
 const table = document.getElementById('table');
+
+// Keep the Connect button in sync with the current authenticated session.
+function setConnectedState(isConnected) {
+  connectBtn.disabled = Boolean(isConnected);
+  connectBtn.textContent = isConnected ? 'Connected to Spotify' : 'Connect Spotify';
+  connectBtn.setAttribute(
+    'aria-label',
+    isConnected ? 'Connected to Spotify' : 'Connect Spotify'
+  );
+}
 
 connectBtn.addEventListener('click', async () => {
   try {
@@ -208,8 +283,7 @@ connectBtn.addEventListener('click', async () => {
       (error.message || error)
     );
 
-    connectBtn.disabled = false;
-    connectBtn.textContent = 'Connect Spotify';
+    setConnectedState(false);
   }
 });
 
@@ -233,35 +307,43 @@ async function generateBill(){
     if (!token) { status.textContent='Authentication required.'; genBtn.disabled=false; return }
     status.textContent='Fetching top tracks...';
     const top = await sfetch('/me/top/tracks?limit=20', token);
-    // fetch recently played to estimate counts (last 50 plays only)
+    // Count matches in the last 50 recently played items. This is an estimate,
+    // not a lifetime play count; tracks outside this window will show 0.0 minutes.
     status.textContent='Fetching recent plays (estimates)...';
     let recent = {items:[]};
-    try{ recent = await sfetch('/me/player/recently-played?limit=50', token); }catch(e){/*ignore*/}
+    try {
+      recent = await sfetch('/me/player/recently-played?limit=50', token);
+    } catch (error) {
+      console.warn('Could not fetch recently played tracks; estimates will be zero:', error);
+    }
     const counts = {};
-    recent.items.forEach(it=>{ const id = it.track.id; counts[id] = (counts[id]||0)+1 });
+    (recent.items || []).forEach(it=>{
+      const id = it.track && it.track.id;
+      if (id) counts[id] = (counts[id] || 0) + 1;
+    });
 
-    // fetch genres from primary artist
     status.textContent='Fetching artist genres...';
-    const enhanced = await Promise.all(top.items.map(async (t,idx)=>{
-      let genre='';
-      try{
-        const artist = await sfetch('/artists/'+t.artists[0].id, token);
-        genre = (artist.genres && artist.genres.length)?artist.genres[0]:'—';
-      }catch(e){genre='—'}
+    const genreMap = await fetchGenreMap(top.items, token);
+
+    const enhanced = top.items.map((t,idx)=>{
+      const genres = (t.artists || [])
+        .map(artist => genreMap.get(artist.id))
+        .filter(Boolean);
+      const genre = [...new Set(genres)].slice(0, 2).join(', ') || 'Not available';
       const times = counts[t.id] || 0;
-      const mins = (times>0) ? (msToMinutes(t.duration_ms*times)) : '—';
+      const mins = msToMinutes(t.duration_ms * times);
       return {
         rank: idx+1,
         id: t.id,
         name: t.name,
-        artists: t.artists.map(a=>a.name).join(', '),
+        artists: (t.artists || []).map(a=>a.name).join(', '),
         genre,
         duration_ms: t.duration_ms,
         times_played_est: times,
         mins_played_est: mins,
         thumbnail: t.album.images && t.album.images[0] ? t.album.images[0].url : ''
-      }
-    }));
+      };
+    });
 
     currentTracks = enhanced;
     renderTable(enhanced);
@@ -278,21 +360,24 @@ function renderTable(list){
     tr.innerHTML = `
       <td class="rank">${item.rank}.</td>
       <td>
-        <div class="songrow"><img src="${item.thumbnail}" class="thumb" onerror="this.style.display='none'">
-        <div><div>${item.name}</div><div class="small">${msToMinutes(item.duration_ms)} min</div></div></div>
+        <div class="songrow">
+          <img src="${escapeHTML(item.thumbnail)}" class="thumb" onerror="this.style.display='none'" alt="">
+          <div class="song-title">${escapeHTML(item.name)}</div>
+        </div>
       </td>
-      <td>${item.artists}</td>
-      <td>${item.genre}</td>
-      <td>${item.mins_played_est}</td>
-      <td>${item.times_played_est}</td>
+      <td>${escapeHTML(item.artists)}</td>
+      <td>${escapeHTML(item.genre)}</td>
+      <td class="numeric">${msToMinutes(item.duration_ms)} min</td>
+      <td class="numeric">${escapeHTML(item.mins_played_est)} min</td>
+      <td class="numeric">${escapeHTML(item.times_played_est)}</td>
     `;
     tbody.appendChild(tr);
-  })
+  });
 }
 
 function buildCSV(list){
-  const rows = [['Rank','Song','Artist','Genre','Mins Played (est.)','Times Played (est.)']];
-  list.forEach(r=>rows.push([r.rank, r.name, r.artists, r.genre, r.mins_played_est, r.times_played_est]));
+  const rows = [['Rank','Song','Artist','Genre','Duration (min)','Mins Played (est.)','Times Played (est.)']];
+  list.forEach(r=>rows.push([r.rank, r.name, r.artists, r.genre, msToMinutes(r.duration_ms), r.mins_played_est, r.times_played_est]));
   return rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
 }
 
@@ -300,13 +385,29 @@ function buildCSV(list){
 // On load: enable generate if already authed
 // --------------------
 (async ()=>{
+  // A token already stored in this tab means the user is connected for this session.
   const token = sessionStorage.getItem('access_token');
-  if (token) genBtn.disabled=false;
-  // If we arrived with ?code=... attempt token exchange automatically
+  if (token) {
+    setConnectedState(true);
+    genBtn.disabled = false;
+  }
+
+  // If Spotify redirected back with an authorization code, exchange it for a token.
   const url = new URL(window.location);
-  if (url.searchParams.get('code')){
-    await handleRedirect();
-    genBtn.disabled=false;
+  if (url.searchParams.get('code')) {
+    try {
+      const newToken = await handleRedirect();
+      if (newToken) {
+        setConnectedState(true);
+        genBtn.disabled = false;
+      } else {
+        setConnectedState(false);
+      }
+    } catch (error) {
+      console.error('Spotify callback failed:', error);
+      setConnectedState(false);
+      status.textContent = 'Spotify connection failed: ' + (error.message || error);
+    }
   }
 })();
 </script>
